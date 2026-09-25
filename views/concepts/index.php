@@ -40,7 +40,13 @@ $scopes = ['mensual' => 'Mensual', 'sac' => 'SAC', 'ambos' => 'Mensual y SAC'];
                         <?php if ($c['description']): ?><div class="small text-body-secondary"><?= e($c['description']) ?></div><?php endif; ?>
                     </td>
                     <td><span class="badge bg-<?= $typeColors[$c['type']] ?>-subtle text-<?= $typeColors[$c['type']] ?>-emphasis"><?= e(CONCEPT_TYPES[$c['type']]) ?></span></td>
-                    <td class="small"><?= e($describe($c)) ?></td>
+                    <td class="small">
+                        <?php if ($c['calc_mode'] === 'formula'): ?>
+                            <code class="d-inline-block text-truncate" style="max-width: 280px" title="<?= e($c['formula']) ?>"><?= e($c['formula']) ?></code>
+                        <?php else: ?>
+                            <?= e($describe($c)) ?>
+                        <?php endif; ?>
+                    </td>
                     <td class="small">
                         <?= $c['applies_to_all'] ? '<i class="bi bi-people-fill text-primary"></i> Todos' : '<i class="bi bi-person"></i> Asignado / novedad' ?>
                         <?php if (!$c['applies_to_all'] && $c['assigned']): ?><span class="text-body-secondary">(<?= (int) $c['assigned'] ?>)</span><?php endif; ?>

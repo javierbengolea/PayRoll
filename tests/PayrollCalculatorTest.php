@@ -177,4 +177,59 @@ final class PayrollCalculatorTest extends TestCase
         $this->assertEquals(10000.00, $this->amounts($r)['120']);
         $this->assertEquals(['100', '120', '150'], array_column($r['items'], 'code'));
     }
+
+    public function testFormulaConceptsUseVariablesAndPreviousConcepts(): void
+    {
+        $calc = new PayrollCalculator(200);
+        $r = $calc->calculate(
+            ['base_salary' => 1000000, 'hire_date' => '2020-01-01', 'termination_date' => null, 'birth_date' => '1990-06-15'],
+            ['year' => 2026, 'month' => 5, 'type' => 'mensual'],
+            [
+                $this->concept('100', 'haber_rem', 'basico', 0, null, 10),
+                $this->concept('110', 'haber_rem', 'antiguedad', 1, null, 20),
+                $this->concept('140', 'haber_rem', 'dias', -100, null, 25),              // sin novedad: no aparece
+                $this->concept('120', 'haber_rem', 'formula', 8.33, null, 30,
+                    ['formula' => 'SI(C("140") = 0; REMUNERATIVO * VALOR / 100; 0)']),
+                $this->concept('160', 'haber_rem', 'formula', 10, null, 35, ['formula' => 'BASICO * VALOR / 100']),
+                $this->concept('170', 'haber_rem', 'formula', 0, null, 36, ['formula' => 'SI(EDAD >= 35; 1000; 0) + ANTIGUEDAD']),
+                $this->concept('132', 'haber_rem', 'formula', 0, null, 42, ['formula' => 'CANTIDAD * VALOR_HORA * 1,5', 'quantity' => 4]),
+                $this->concept('500', 'descuento', 'formula', 11, null, 500, ['formula' => 'MIN(REMUNERATIVO; 1200000) * VALOR / 100']),
+            ]
+        );
+        $a = $this->amounts($r);
+        $this->assertArrayNotHasKey('140', $a);
+        $this->assertEquals(88298.00, $a['120']);    // 8,33% de 1.060.000 (6 años de antigüedad)
+        $this->assertEquals(100000.00, $a['160']);
+        $this->assertEquals(1006.00, $a['170']);     // 35 años de edad + 6 de antigüedad
+        $this->assertEquals(30000.00, $a['132']);    // 4 × 5.000 × 1,5
+        $this->assertEquals(132000.00, $a['500']);   // tope: 11% de 1.200.000
+    }
+
+    public function testFormulaLosesPresentismoWithAbsences(): void
+    {
+        $calc = new PayrollCalculator();
+        $r = $calc->calculate(
+            ['base_salary' => 600000, 'hire_date' => '2026-01-01', 'termination_date' => null],
+            ['year' => 2026, 'month' => 4, 'type' => 'mensual'],
+            [
+                $this->concept('100', 'haber_rem', 'basico', 0, null, 10),
+                $this->concept('140', 'haber_rem', 'dias', -100, null, 25, ['quantity' => 1]),
+                $this->concept('120', 'haber_rem', 'formula', 8.33, null, 30,
+                    ['formula' => 'SI(C("140") = 0; REMUNERATIVO * VALOR / 100; 0)']),
+            ]
+        );
+        $this->assertArrayNotHasKey('120', $this->amounts($r));
+        $this->assertEquals(580000.00, $r['gross_rem']);
+    }
+
+    public function testFormulaErrorsNameTheConcept(): void
+    {
+        $this->expectException(\App\Services\Formula\FormulaException::class);
+        $this->expectExceptionMessage('Concepto 999 (Concepto 999): División por cero');
+        (new PayrollCalculator())->calculate(
+            ['base_salary' => 1000, 'hire_date' => '2026-01-01', 'termination_date' => null],
+            ['year' => 2026, 'month' => 1, 'type' => 'mensual'],
+            [$this->concept('999', 'haber_rem', 'formula', 0, null, 10, ['formula' => 'BASICO / ANTIGUEDAD'])]
+        );
+    }
 }

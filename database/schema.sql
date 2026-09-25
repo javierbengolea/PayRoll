@@ -12,10 +12,14 @@ DROP TABLE IF EXISTS payroll_periods;
 DROP TABLE IF EXISTS employee_concepts;
 DROP TABLE IF EXISTS concepts;
 DROP TABLE IF EXISTS employees;
+DROP TABLE IF EXISTS category_salaries;
+DROP TABLE IF EXISTS categories;
+DROP TABLE IF EXISTS agreements;
 DROP TABLE IF EXISTS positions;
 DROP TABLE IF EXISTS departments;
 DROP TABLE IF EXISTS settings;
 DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS migrations;
 
 SET FOREIGN_KEY_CHECKS = 1;
 
@@ -53,13 +57,46 @@ CREATE TABLE departments (
     active      TINYINT(1) NOT NULL DEFAULT 1
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Puestos: función que cumple el empleado (el básico lo define la categoría)
 CREATE TABLE positions (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     department_id INT UNSIGNED NULL,
     name          VARCHAR(120) NOT NULL,
-    base_salary   DECIMAL(14,2) NOT NULL DEFAULT 0,
     active        TINYINT(1) NOT NULL DEFAULT 1,
     CONSTRAINT fk_positions_department FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- Convenios colectivos, categorías y escalas salariales con vigencia
+-- ---------------------------------------------------------------------
+CREATE TABLE agreements (
+    id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    code        VARCHAR(20)  NOT NULL UNIQUE,          -- ej: CCT 130/75
+    name        VARCHAR(160) NOT NULL,
+    description VARCHAR(255) NULL,
+    active      TINYINT(1) NOT NULL DEFAULT 1
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE categories (
+    id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    agreement_id INT UNSIGNED NOT NULL,
+    code         VARCHAR(20)  NOT NULL,
+    name         VARCHAR(120) NOT NULL,
+    sort_order   INT NOT NULL DEFAULT 100,
+    active       TINYINT(1) NOT NULL DEFAULT 1,
+    UNIQUE KEY uq_category (agreement_id, code),
+    CONSTRAINT fk_categories_agreement FOREIGN KEY (agreement_id) REFERENCES agreements(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Cada fila es el básico de una categoría a partir de una fecha (paritarias).
+-- Se usa el valor con la mayor fecha de vigencia <= fin del período liquidado.
+CREATE TABLE category_salaries (
+    id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    category_id INT UNSIGNED NOT NULL,
+    valid_from  DATE NOT NULL,
+    base_salary DECIMAL(14,2) NOT NULL,
+    UNIQUE KEY uq_category_salary (category_id, valid_from),
+    CONSTRAINT fk_cs_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
@@ -81,8 +118,9 @@ CREATE TABLE employees (
     termination_date DATE NULL,
     department_id    INT UNSIGNED NULL,
     position_id      INT UNSIGNED NULL,
+    category_id      INT UNSIGNED NULL,
     contract_type    ENUM('permanente','plazo_fijo','eventual','pasantia') NOT NULL DEFAULT 'permanente',
-    base_salary      DECIMAL(14,2) NULL,                    -- NULL = usa el básico del puesto
+    base_salary      DECIMAL(14,2) NULL,                    -- NULL = usa el básico de la categoría
     bank_name        VARCHAR(80) NULL,
     cbu              CHAR(22) NULL,
     status           ENUM('activo','licencia','baja') NOT NULL DEFAULT 'activo',
@@ -91,6 +129,7 @@ CREATE TABLE employees (
     updated_at       DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_employees_department FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE SET NULL,
     CONSTRAINT fk_employees_position   FOREIGN KEY (position_id)   REFERENCES positions(id)   ON DELETE SET NULL,
+    CONSTRAINT fk_employees_category   FOREIGN KEY (category_id)   REFERENCES categories(id)  ON DELETE SET NULL,
     INDEX idx_employees_status (status),
     INDEX idx_employees_name (last_name, first_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -106,6 +145,7 @@ CREATE TABLE employees (
 --              dias        -> cantidad * (básico / 30) * value / 100
 --              antiguedad  -> básico * value / 100 * años de antigüedad
 --              sac         -> mejor remuneración del semestre * value / 100 * proporción
+--              formula     -> expresión en la columna `formula` (ver src/Services/Formula)
 --   base (solo porcentaje): basico | remunerativo | no_remunerativo | bruto
 --   scope: en qué tipo de liquidación se aplica automáticamente
 -- ---------------------------------------------------------------------
@@ -114,9 +154,10 @@ CREATE TABLE concepts (
     code           VARCHAR(10)  NOT NULL UNIQUE,
     name           VARCHAR(120) NOT NULL,
     type           ENUM('haber_rem','haber_no_rem','descuento','contribucion') NOT NULL,
-    calc_mode      ENUM('basico','fijo','porcentaje','cantidad','horas','dias','antiguedad','sac') NOT NULL,
+    calc_mode      ENUM('basico','fijo','porcentaje','cantidad','horas','dias','antiguedad','sac','formula') NOT NULL,
     base           ENUM('basico','remunerativo','no_remunerativo','bruto') NULL,
     value          DECIMAL(14,4) NOT NULL DEFAULT 0,
+    formula        TEXT NULL,
     applies_to_all TINYINT(1) NOT NULL DEFAULT 0,
     scope          ENUM('mensual','sac','ambos') NOT NULL DEFAULT 'mensual',
     sort_order     INT NOT NULL DEFAULT 100,
@@ -180,6 +221,7 @@ CREATE TABLE payslips (
     cuil              CHAR(11)     NOT NULL,
     department_name   VARCHAR(120) NULL,
     position_name     VARCHAR(120) NULL,
+    category_name     VARCHAR(160) NULL,
     hire_date         DATE NOT NULL,
     base_salary       DECIMAL(14,2) NOT NULL,
     seniority_years   SMALLINT UNSIGNED NOT NULL DEFAULT 0,
@@ -210,6 +252,14 @@ CREATE TABLE payslip_items (
     CONSTRAINT fk_items_payslip FOREIGN KEY (payslip_id) REFERENCES payslips(id) ON DELETE CASCADE,
     CONSTRAINT fk_items_concept FOREIGN KEY (concept_id) REFERENCES concepts(id) ON DELETE SET NULL,
     INDEX idx_items_concept (concept_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- Migraciones aplicadas (bin/migrate.php)
+-- ---------------------------------------------------------------------
+CREATE TABLE migrations (
+    name       VARCHAR(190) PRIMARY KEY,
+    applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------

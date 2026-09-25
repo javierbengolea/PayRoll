@@ -10,6 +10,7 @@ $nav = [
     ['employees',    'people',         'Empleados',     'consulta', ['employees']],
     ['periods',      'calculator',     'Liquidaciones', 'consulta', ['periods', 'payslips']],
     ['concepts',     'list-check',     'Conceptos',     'consulta', ['concepts']],
+    ['categories',   'layers',         'Categorías',    'consulta', ['categories', 'agreements']],
     ['organization', 'diagram-3',      'Organización',  'consulta', ['organization', 'departments', 'positions']],
     ['reports',      'bar-chart-line', 'Reportes',      'consulta', ['reports']],
 ];

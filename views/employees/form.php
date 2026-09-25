@@ -89,13 +89,28 @@ if ($salary !== '' && $salary !== null && is_numeric($salary)) {
                         </select>
                     </div>
                     <div class="col-md-6">
-                        <label class="form-label" for="position_id">Puesto / categoría</label>
+                        <label class="form-label" for="position_id">Puesto</label>
                         <select class="form-select" id="position_id" name="position_id">
                             <option value="">—</option>
                             <?php foreach ($positions as $p): ?>
-                                <option value="<?= $p['id'] ?>" data-department="<?= e($p['department_id']) ?>" data-salary="<?= e(money($p['base_salary'])) ?>"<?= selected($v('position_id'), $p['id']) ?>><?= e($p['name']) ?></option>
+                                <option value="<?= $p['id'] ?>" data-department="<?= e($p['department_id']) ?>"<?= selected($v('position_id'), $p['id']) ?>><?= e($p['name']) ?></option>
                             <?php endforeach; ?>
                         </select>
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label" for="category_id">Convenio y categoría</label>
+                        <select class="form-select<?= invalid('category_id') ?>" id="category_id" name="category_id">
+                            <option value="" data-salary="">Sin categoría (fuera de convenio)</option>
+                            <?php foreach ($categories as $group => $cats): ?>
+                                <optgroup label="<?= e($group) ?>">
+                                    <?php foreach ($cats as $c): ?>
+                                        <option value="<?= $c['id'] ?>" data-salary="<?= e($c['salary'] !== null ? money($c['salary']) : 'sin escala vigente') ?>"<?= selected($v('category_id'), $c['id']) ?>><?= e($c['code'] . ' · ' . $c['name']) ?></option>
+                                    <?php endforeach; ?>
+                                </optgroup>
+                            <?php endforeach; ?>
+                        </select>
+                        <?= field_error('category_id') ?>
+                        <div class="form-text" id="categorySalaryHint">El sueldo básico sale de la escala vigente de la categoría.</div>
                     </div>
                     <div class="col-md-4">
                         <label class="form-label" for="hire_date">Fecha de ingreso *</label>
@@ -111,12 +126,12 @@ if ($salary !== '' && $salary !== null && is_numeric($salary)) {
                         </select>
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label" for="base_salary">Sueldo básico propio</label>
+                        <label class="form-label" for="base_salary">Básico propio (opcional)</label>
                         <div class="input-group">
                             <span class="input-group-text">$</span>
                             <input class="form-control<?= invalid('base_salary') ?>" id="base_salary" name="base_salary" value="<?= e($salary) ?>" inputmode="decimal">
                         </div>
-                        <div class="form-text" id="positionSalaryHint">Si queda vacío se usa el básico del puesto.</div>
+                        <div class="form-text">Solo para quien cobra distinto a la escala o está fuera de convenio. Reemplaza al básico de la categoría.</div>
                         <?= field_error('base_salary') ?>
                     </div>
                 </div>

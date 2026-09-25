@@ -11,12 +11,22 @@ $sortLink = function (string $key, string $label) {
     $icon = $isCurrent ? (($params['dir'] ?? 'asc') === 'asc' ? ' <i class="bi bi-caret-up-fill"></i>' : ' <i class="bi bi-caret-down-fill"></i>') : '';
     return '<a class="text-reset text-decoration-none" href="' . e(url('employees', ['sort' => $key, 'dir' => $dir] + $params)) . '">' . e($label) . $icon . '</a>';
 };
-$exportParams = array_filter(['q' => $q, 'status' => $status, 'department' => $dep]);
+$exportParams = array_filter(['q' => $q, 'status' => $status, 'department' => $dep, 'category' => $_GET['category'] ?? '']);
+$categoryFilter = null;
+foreach ($categories as $group => $cats) {
+    foreach ($cats as $c) {
+        if ((string) $c['id'] === (string) ($_GET['category'] ?? '')) {
+            $categoryFilter = $c['name'] . ' (' . $c['agreement_code'] . ')';
+        }
+    }
+}
 ?>
 <div class="page-header">
     <div>
         <h1>Empleados</h1>
-        <div class="subtitle"><?= $total ?> <?= $total === 1 ? 'resultado' : 'resultados' ?></div>
+        <div class="subtitle"><?= $total ?> <?= $total === 1 ? 'resultado' : 'resultados' ?>
+            <?php if ($categoryFilter): ?>· Categoría <strong><?= e($categoryFilter) ?></strong>
+                <a href="<?= url('employees', array_filter(['q' => $q, 'status' => $status, 'department' => $dep])) ?>" class="ms-1" title="Quitar filtro"><i class="bi bi-x-circle"></i></a><?php endif; ?></div>
     </div>
     <div class="d-flex gap-2">
         <a class="btn btn-outline-secondary" href="<?= url('employees/export', $exportParams) ?>"><i class="bi bi-filetype-csv me-1"></i>Exportar</a>
@@ -30,6 +40,7 @@ $exportParams = array_filter(['q' => $q, 'status' => $status, 'department' => $d
     <div class="card-body border-bottom">
         <form class="row g-2" method="get" action="<?= url('') ?>">
             <input type="hidden" name="r" value="employees">
+            <?php if (!empty($_GET['category'])): ?><input type="hidden" name="category" value="<?= (int) $_GET['category'] ?>"><?php endif; ?>
             <div class="col-md-5">
                 <div class="input-group">
                     <span class="input-group-text"><i class="bi bi-search"></i></span>
@@ -66,6 +77,7 @@ $exportParams = array_filter(['q' => $q, 'status' => $status, 'department' => $d
                 <th><?= $sortLink('nombre', 'Empleado') ?></th>
                 <th class="d-none d-md-table-cell">CUIL</th>
                 <th class="d-none d-lg-table-cell">Departamento / Puesto</th>
+                <th class="d-none d-xl-table-cell">Categoría</th>
                 <th class="d-none d-md-table-cell"><?= $sortLink('ingreso', 'Ingreso') ?></th>
                 <th class="num"><?= $sortLink('sueldo', 'Básico') ?></th>
                 <th>Estado</th>
@@ -84,6 +96,7 @@ $exportParams = array_filter(['q' => $q, 'status' => $status, 'department' => $d
                         <?= e($emp['department_name'] ?? '—') ?>
                         <div class="small text-body-secondary"><?= e($emp['position_name'] ?? '') ?></div>
                     </td>
+                    <td class="d-none d-xl-table-cell small"><?= e($emp['category_name'] ?? 'Fuera de convenio') ?></td>
                     <td class="d-none d-md-table-cell"><?= e(fmt_date($emp['hire_date'])) ?></td>
                     <td class="num"><?= money($emp['effective_salary']) ?></td>
                     <td><?php $map = EMPLOYEE_STATUS; $value = $emp['status']; require BASE_PATH . '/views/partials/status.php'; ?></td>

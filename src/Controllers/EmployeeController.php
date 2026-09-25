@@ -6,6 +6,7 @@ namespace App\Controllers;
 use App\Core\Audit;
 use App\Core\Controller;
 use App\Core\Validator;
+use App\Repositories\Categories;
 use App\Services\CsvExporter;
 
 final class EmployeeController extends Controller
@@ -31,17 +32,19 @@ final class EmployeeController extends Controller
         $dir = ($_GET['dir'] ?? '') === 'desc' ? 'DESC' : 'ASC';
 
         $employees = $this->db->all(
-            "SELECT e.*, d.name AS department_name, p.name AS position_name,
-                    COALESCE(e.base_salary, p.base_salary, 0) AS effective_salary
+            "SELECT e.*, d.name AS department_name, p.name AS position_name, c.name AS category_name,
+                    " . Categories::effectiveSalary('CURDATE()') . " AS effective_salary
                FROM employees e
           LEFT JOIN departments d ON d.id = e.department_id
           LEFT JOIN positions p ON p.id = e.position_id
+          LEFT JOIN categories c ON c.id = e.category_id
              $where ORDER BY $sort $dir LIMIT " . self::PER_PAGE . " OFFSET $offset",
             $params
         );
 
         $departments = $this->db->all('SELECT id, name FROM departments ORDER BY name');
-        $this->render('employees/index', compact('employees', 'departments', 'total', 'page', 'pages'));
+        $categories = Categories::grouped();
+        $this->render('employees/index', compact('employees', 'departments', 'categories', 'total', 'page', 'pages'));
     }
 
     public function export(): void
@@ -50,19 +53,22 @@ final class EmployeeController extends Controller
         $rows = $this->db->all(
             "SELECT e.file_number, e.last_name, e.first_name, e.cuil, e.email, e.phone, e.hire_date,
                     e.termination_date, d.name AS department, p.name AS position, e.contract_type,
-                    COALESCE(e.base_salary, p.base_salary, 0) AS salary, e.bank_name, e.cbu, e.status
+                    CONCAT(a.code, ' - ', c.name) AS category,
+                    " . Categories::effectiveSalary('CURDATE()') . " AS salary, e.bank_name, e.cbu, e.status
                FROM employees e
           LEFT JOIN departments d ON d.id = e.department_id
           LEFT JOIN positions p ON p.id = e.position_id
+          LEFT JOIN categories c ON c.id = e.category_id
+          LEFT JOIN agreements a ON a.id = c.agreement_id
              $where ORDER BY e.last_name, e.first_name",
             $params
         );
         CsvExporter::download('empleados_' . date('Ymd') . '.csv', [
             'Legajo', 'Apellido', 'Nombre', 'CUIL', 'Email', 'Teléfono', 'Ingreso', 'Egreso',
-            'Departamento', 'Puesto', 'Contratación', 'Básico', 'Banco', 'CBU', 'Estado',
+            'Departamento', 'Puesto', 'Categoría', 'Contratación', 'Básico', 'Banco', 'CBU', 'Estado',
         ], array_map(fn ($r) => [
             $r['file_number'], $r['last_name'], $r['first_name'], fmt_cuil($r['cuil']), $r['email'], $r['phone'],
-            fmt_date($r['hire_date']), fmt_date($r['termination_date']), $r['department'], $r['position'],
+            fmt_date($r['hire_date']), fmt_date($r['termination_date']), $r['department'], $r['position'], $r['category'],
             CONTRACT_TYPES[$r['contract_type']] ?? $r['contract_type'], money($r['salary'], false),
             $r['bank_name'], $r['cbu'] ? "'" . $r['cbu'] : '', EMPLOYEE_STATUS[$r['status']][0] ?? $r['status'],
         ], $rows));
@@ -196,17 +202,25 @@ final class EmployeeController extends Controller
             $where[] = 'e.department_id = :dep';
             $params['dep'] = (int) $_GET['department'];
         }
+        if (!empty($_GET['category'])) {
+            $where[] = 'e.category_id = :cat';
+            $params['cat'] = (int) $_GET['category'];
+        }
         return [$where ? 'WHERE ' . implode(' AND ', $where) : '', $params];
     }
 
     private function findOrFail(int $id): array
     {
         $employee = $this->db->one(
-            'SELECT e.*, d.name AS department_name, p.name AS position_name, p.base_salary AS position_salary,
-                    COALESCE(e.base_salary, p.base_salary, 0) AS effective_salary
+            'SELECT e.*, d.name AS department_name, p.name AS position_name,
+                    c.name AS category_name, c.code AS category_code, c.agreement_id, a.code AS agreement_code, a.name AS agreement_name,
+                    ' . Categories::salaryAt('CURDATE()') . ' AS category_salary,
+                    ' . Categories::effectiveSalary('CURDATE()') . ' AS effective_salary
                FROM employees e
           LEFT JOIN departments d ON d.id = e.department_id
           LEFT JOIN positions p ON p.id = e.position_id
+          LEFT JOIN categories c ON c.id = e.category_id
+          LEFT JOIN agreements a ON a.id = c.agreement_id
               WHERE e.id = ?',
             [$id]
         );
@@ -221,7 +235,8 @@ final class EmployeeController extends Controller
         return [
             'employee'    => $employee,
             'departments' => $this->db->all('SELECT id, name FROM departments WHERE active = 1 ORDER BY name'),
-            'positions'   => $this->db->all('SELECT id, name, department_id, base_salary FROM positions WHERE active = 1 ORDER BY name'),
+            'positions'   => $this->db->all('SELECT id, name, department_id FROM positions WHERE active = 1 ORDER BY name'),
+            'categories'  => Categories::grouped(),
         ];
     }
 
@@ -230,7 +245,7 @@ final class EmployeeController extends Controller
         $labels = [
             'file_number' => 'Legajo', 'first_name' => 'Nombre', 'last_name' => 'Apellido', 'cuil' => 'CUIL',
             'birth_date' => 'Fecha de nacimiento', 'email' => 'Email', 'hire_date' => 'Fecha de ingreso',
-            'termination_date' => 'Fecha de egreso', 'base_salary' => 'Sueldo básico', 'cbu' => 'CBU',
+            'termination_date' => 'Fecha de egreso', 'base_salary' => 'Básico propio', 'cbu' => 'CBU',
             'contract_type' => 'Tipo de contratación', 'status' => 'Estado', 'gender' => 'Género',
         ];
         $v = Validator::make($_POST, [
@@ -263,6 +278,13 @@ final class EmployeeController extends Controller
         if ($term !== '' && $hire !== '' && $term < $hire) {
             $v->addError('termination_date', 'La fecha de egreso no puede ser anterior al ingreso.');
         }
+        $categoryId = (int) ($_POST['category_id'] ?? 0);
+        if ($categoryId && !$this->db->value('SELECT id FROM categories WHERE id = ?', [$categoryId])) {
+            $v->addError('category_id', 'La categoría no existe.');
+        }
+        if (!$categoryId && trim((string) ($_POST['base_salary'] ?? '')) === '') {
+            $v->addError('category_id', 'Asigná una categoría o cargá un básico propio.');
+        }
         if (($_POST['status'] ?? '') === 'baja' && $term === '') {
             $v->addError('termination_date', 'Para dar de baja indicá la fecha de egreso.');
         }
@@ -291,6 +313,7 @@ final class EmployeeController extends Controller
             'termination_date' => $term !== '' ? $term : null,
             'department_id'    => (int) ($_POST['department_id'] ?? 0) ?: null,
             'position_id'      => (int) ($_POST['position_id'] ?? 0) ?: null,
+            'category_id'      => $categoryId ?: null,
             'contract_type'    => $_POST['contract_type'],
             'base_salary'      => $salary !== null ? Validator::normalizeNumber($salary) : null,
             'bank_name'        => $nullable('bank_name'),

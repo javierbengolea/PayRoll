@@ -142,6 +142,7 @@ const CALC_MODES = [
     'dias'       => 'Días (básico/30 × %)',
     'antiguedad' => 'Antigüedad (% por año)',
     'sac'        => 'SAC / aguinaldo',
+    'formula'    => 'Fórmula',
 ];
 
 const CONCEPT_BASES = [

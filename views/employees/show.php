@@ -45,11 +45,17 @@ $age = $employee['birth_date'] ? (new DateTimeImmutable($employee['birth_date'])
                 <dl class="dl-grid">
                     <dt>Departamento</dt><dd><?= e($employee['department_name'] ?? '—') ?></dd>
                     <dt>Puesto</dt><dd><?= e($employee['position_name'] ?? '—') ?></dd>
+                    <dt>Categoría</dt><dd>
+                        <?php if ($employee['category_id']): ?>
+                            <a href="<?= url('categories', ['agreement' => $employee['agreement_id'] ?? '']) ?>"><?= e($employee['category_name']) ?></a>
+                            <div class="small text-body-secondary"><?= e($employee['agreement_code'] . ' · ' . $employee['agreement_name']) ?></div>
+                        <?php else: ?>Fuera de convenio<?php endif; ?>
+                    </dd>
                     <dt>Contratación</dt><dd><?= e(CONTRACT_TYPES[$employee['contract_type']] ?? '') ?></dd>
                     <dt>Ingreso</dt><dd><?= e(fmt_date($employee['hire_date'])) ?> (<?= $seniority ?> <?= $seniority === 1 ? 'año' : 'años' ?>)</dd>
                     <?php if ($employee['termination_date']): ?><dt>Egreso</dt><dd><?= e(fmt_date($employee['termination_date'])) ?></dd><?php endif; ?>
                     <dt>Básico</dt><dd class="fw-semibold"><?= money($employee['effective_salary']) ?>
-                        <?php if ($employee['base_salary'] === null): ?><div class="small text-body-secondary">(del puesto)</div><?php endif; ?></dd>
+                        <div class="small text-body-secondary"><?= $employee['base_salary'] === null ? 'Según escala de la categoría' : 'Básico propio' . ($employee['category_salary'] !== null ? ' (escala: ' . money($employee['category_salary']) . ')' : '') ?></div></dd>
                     <dt>Banco</dt><dd><?= e($employee['bank_name'] ?: '—') ?></dd>
                     <dt>CBU</dt><dd class="text-break"><?= e($employee['cbu'] ?: '—') ?></dd>
                 </dl>

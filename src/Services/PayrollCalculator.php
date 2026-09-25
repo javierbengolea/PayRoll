@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Services\Formula\Formula;
+use App\Services\Formula\FormulaException;
 use DateTimeImmutable;
 
 /**
@@ -23,7 +25,7 @@ final class PayrollCalculator
     }
 
     /**
-     * @param array $employee ['base_salary' => float, 'hire_date' => 'Y-m-d', 'termination_date' => ?string]
+     * @param array $employee ['base_salary' => float, 'hire_date' => 'Y-m-d', 'termination_date' => ?string, 'birth_date' => ?string]
      * @param array $period   ['year' => int, 'month' => int, 'type' => 'mensual'|'sac']
      * @param array $lines    Conceptos a liquidar. Cada uno con las claves de la tabla `concepts`
      *                        más, opcionalmente, 'quantity' y 'amount' (importe informado que
@@ -49,6 +51,14 @@ final class PayrollCalculator
         $deductions = 0.0;
         $contrib = 0.0;
         $items = [];
+        $computed = []; // código => ['amount' => x, 'quantity' => y] para C() y CANT()
+
+        $monthDays = (int) $monthEnd->format('j');
+        $monthWorked = self::workedDays($monthStart, $monthEnd, $hire, $termination);
+        [$semStart, $semEnd] = self::semester((int) $period['year'], (int) $period['month']);
+        $semesterDays = (int) $semStart->diff($semEnd)->days + 1;
+        $isSac = ($period['type'] ?? 'mensual') === 'sac';
+        $age = !empty($employee['birth_date']) ? self::seniorityYears(new DateTimeImmutable($employee['birth_date']), $monthEnd) : 0;
 
         foreach ($lines as $line) {
             $value = (float) $line['value'];
@@ -62,10 +72,8 @@ final class PayrollCalculator
             } else {
                 switch ($line['calc_mode']) {
                     case 'basico':
-                        $days = self::workedDays($monthStart, $monthEnd, $hire, $termination);
-                        $monthDays = (int) $monthEnd->format('j');
-                        $amount = $days >= $monthDays ? $basic : $basic * $days / $monthDays;
-                        $qty = $days >= $monthDays ? 30 : $days;
+                        $amount = $monthWorked >= $monthDays ? $basic : $basic * $monthWorked / $monthDays;
+                        $qty = $monthWorked >= $monthDays ? 30 : $monthWorked;
                         break;
                     case 'fijo':
                         $amount = $value;
@@ -101,12 +109,41 @@ final class PayrollCalculator
                         $rate = $value;
                         break;
                     case 'sac':
-                        [$semStart, $semEnd] = self::semester((int) $period['year'], (int) $period['month']);
                         $worked = self::workedDays($semStart, $semEnd, $hire, $termination);
-                        $total = (int) $semStart->diff($semEnd)->days + 1;
-                        $amount = $sacBestSalary * $value / 100 * ($worked / $total);
+                        $amount = $sacBestSalary * $value / 100 * ($worked / $semesterDays);
                         $qty = $worked;
                         $rate = $value;
+                        break;
+                    case 'formula':
+                        $vars = [
+                            'BASICO'             => $basic,
+                            'ANTIGUEDAD'         => $seniority,
+                            'CANTIDAD'           => $qty ?? 0,
+                            'VALOR'              => $value,
+                            'VALOR_HORA'         => $basic / max(1, $this->hoursDivisor),
+                            'VALOR_DIA'          => $basic / 30,
+                            'DIAS_TRABAJADOS'    => $isSac ? self::workedDays($semStart, $semEnd, $hire, $termination) : $monthWorked,
+                            'DIAS_MES'           => $monthDays,
+                            'REMUNERATIVO'       => $rem,
+                            'NO_REMUNERATIVO'    => $noRem,
+                            'BRUTO'              => $rem + $noRem,
+                            'DESCUENTOS'         => $deductions,
+                            'MEJOR_REMUNERACION' => $sacBestSalary,
+                            'DIAS_SEMESTRE'      => $semesterDays,
+                            'EDAD'               => $age,
+                            'MES'                => (int) $period['month'],
+                            'ANIO'               => (int) $period['year'],
+                            'ES_SAC'             => $isSac ? 1 : 0,
+                        ];
+                        try {
+                            $amount = Formula::evaluate(
+                                Formula::compile((string) ($line['formula'] ?? '')),
+                                $vars,
+                                static fn (string $code, string $field) => (float) ($computed[$code][$field] ?? 0)
+                            );
+                        } catch (FormulaException $e) {
+                            throw new FormulaException("Concepto {$line['code']} ({$line['name']}): " . $e->getMessage(), 0, $e);
+                        }
                         break;
                 }
             }
@@ -115,6 +152,8 @@ final class PayrollCalculator
             if (abs($amount) < 0.005) {
                 continue;
             }
+            $computed[$line['code']]['amount'] = ($computed[$line['code']]['amount'] ?? 0) + $amount;
+            $computed[$line['code']]['quantity'] = ($computed[$line['code']]['quantity'] ?? 0) + (float) ($qty ?? 0);
 
             match ($line['type']) {
                 'haber_rem'    => $rem += $amount,

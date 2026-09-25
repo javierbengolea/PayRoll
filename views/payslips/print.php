@@ -81,11 +81,12 @@ $copies = ['ORIGINAL', 'DUPLICADO'];
             <div><span class="lbl">CUIL</span><span class="val"><?= e(fmt_cuil($ps['cuil'])) ?></span></div>
             <div><span class="lbl">Fecha de ingreso</span><span class="val"><?= e(fmt_date($ps['hire_date'])) ?></span></div>
             <div><span class="lbl">Antigüedad</span><span class="val"><?= (int) $ps['seniority_years'] ?> años</span></div>
-            <div><span class="lbl">Puesto / categoría</span><span class="val"><?= e($ps['position_name'] ?? '—') ?></span></div>
+            <div><span class="lbl">Puesto</span><span class="val"><?= e($ps['position_name'] ?? '—') ?></span></div>
             <div><span class="lbl">Sueldo básico</span><span class="val"><?= money($ps['base_salary']) ?></span></div>
             <div><span class="lbl">Departamento</span><span class="val"><?= e($ps['department_name'] ?? '—') ?></span></div>
+            <div style="grid-column: span 2"><span class="lbl">Convenio / categoría</span><span class="val"><?= e($ps['category_name'] ?? 'Fuera de convenio') ?></span></div>
             <div><span class="lbl">Fecha de pago</span><span class="val"><?= e(fmt_date($ps['payment_date'])) ?: '—' ?></span></div>
-            <div style="grid-column: span 2"><span class="lbl">Banco / CBU</span><span class="val"><?= e(trim(($ps['bank_name'] ?? '') . ' ' . ($ps['cbu'] ?? ''))) ?: 'Efectivo' ?></span></div>
+            <div style="grid-column: span 4"><span class="lbl">Banco / CBU</span><span class="val"><?= e(trim(($ps['bank_name'] ?? '') . ' ' . ($ps['cbu'] ?? ''))) ?: 'Efectivo' ?></span></div>
         </div>
         <table class="items">
             <thead><tr><th style="width:9%">Cód.</th><th>Concepto</th><th class="n" style="width:10%">Cant.</th><th class="n" style="width:15%">Rem.</th><th class="n" style="width:15%">No rem.</th><th class="n" style="width:15%">Descuentos</th></tr></thead>

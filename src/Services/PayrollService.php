@@ -4,7 +4,9 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Core\Database;
+use App\Repositories\Categories;
 use App\Repositories\Settings;
+use App\Services\Formula\FormulaException;
 use RuntimeException;
 
 /**
@@ -26,21 +28,34 @@ final class PayrollService
         return $period;
     }
 
-    /** Empleados alcanzados por el período: ingresados antes del fin de mes y sin baja previa al inicio. */
-    public function eligibleEmployees(array $period): array
+    /**
+     * Empleados alcanzados por el período: ingresados antes del fin de mes y sin baja previa al inicio.
+     * El básico se toma de la escala de su categoría vigente al fin del período.
+     */
+    public function eligibleEmployees(array $period, ?int $employeeId = null): array
     {
         [$from, $to] = $this->periodRange($period);
+        $params = ['from' => $from, 'to' => $to, 'salary_at' => $to];
+        $onlyOne = '';
+        if ($employeeId !== null) {
+            $onlyOne = 'AND e.id = :emp';
+            $params['emp'] = $employeeId;
+        }
         return $this->db->all(
-            "SELECT e.*, COALESCE(e.base_salary, p.base_salary, 0) AS effective_salary,
-                    p.name AS position_name, d.name AS department_name
+            'SELECT e.*, ' . Categories::effectiveSalary(':salary_at') . " AS effective_salary,
+                    p.name AS position_name, d.name AS department_name,
+                    CONCAT(c.name, ' (', a.code, ')') AS category_name
                FROM employees e
           LEFT JOIN positions p   ON p.id = e.position_id
           LEFT JOIN departments d ON d.id = e.department_id
+          LEFT JOIN categories c  ON c.id = e.category_id
+          LEFT JOIN agreements a  ON a.id = c.agreement_id
               WHERE e.hire_date <= :to
                 AND (e.termination_date IS NULL OR e.termination_date >= :from)
                 AND (e.status <> 'baja' OR e.termination_date IS NOT NULL)
+                $onlyOne
            ORDER BY e.last_name, e.first_name",
-            ['from' => $from, 'to' => $to]
+            $params
         );
     }
 
@@ -55,55 +70,28 @@ final class PayrollService
             throw new RuntimeException('La liquidación está cerrada y no puede recalcularse.');
         }
 
-        $calculator = new PayrollCalculator((int) Settings::get('hours_divisor', '200'));
-        $scopes = [$period['type'], 'ambos'];
-
-        $general = $this->db->all(
-            'SELECT * FROM concepts WHERE active = 1 AND applies_to_all = 1 AND scope IN (?, ?)',
-            $scopes
-        );
-        $assigned = $this->groupBy($this->db->all(
-            'SELECT c.*, ec.employee_id, ec.value_override, ec.quantity AS assigned_quantity
-               FROM employee_concepts ec JOIN concepts c ON c.id = ec.concept_id
-              WHERE c.active = 1 AND c.scope IN (?, ?)',
-            $scopes
-        ), 'employee_id');
-        $novelties = $this->groupBy($this->db->all(
-            'SELECT n.employee_id, n.quantity AS nov_quantity, n.amount AS nov_amount, c.*
-               FROM novelties n JOIN concepts c ON c.id = n.concept_id
-              WHERE n.period_id = ?',
-            [$periodId]
-        ), 'employee_id');
-
+        $data = $this->loadConcepts($period, $periodId);
         $employees = $this->eligibleEmployees($period);
 
-        return $this->db->transaction(function (Database $db) use ($period, $periodId, $calculator, $general, $assigned, $novelties, $employees) {
+        return $this->db->transaction(function (Database $db) use ($period, $periodId, $data, $employees) {
             $db->run('DELETE FROM payslips WHERE period_id = ?', [$periodId]);
             $count = 0;
 
             foreach ($employees as $emp) {
-                $empId = (int) $emp['id'];
-                $lines = $this->buildLines($general, $assigned[$empId] ?? [], $novelties[$empId] ?? []);
-                $sacBest = $period['type'] === 'sac' ? $this->bestSemesterSalary($empId, $period) : 0.0;
-
-                $result = $calculator->calculate([
-                    'base_salary'      => (float) $emp['effective_salary'],
-                    'hire_date'        => $emp['hire_date'],
-                    'termination_date' => $emp['termination_date'],
-                ], $period, $lines, $sacBest);
-
+                $result = $this->calculateEmployee($emp, $period, $data);
                 if ($result['items'] === []) {
                     continue;
                 }
 
                 $payslipId = $db->insert('payslips', [
                     'period_id'        => $periodId,
-                    'employee_id'      => $empId,
+                    'employee_id'      => (int) $emp['id'],
                     'file_number'      => $emp['file_number'],
                     'employee_name'    => $emp['last_name'] . ', ' . $emp['first_name'],
                     'cuil'             => $emp['cuil'],
                     'department_name'  => $emp['department_name'],
                     'position_name'    => $emp['position_name'],
+                    'category_name'    => $emp['category_name'],
                     'hire_date'        => $emp['hire_date'],
                     'base_salary'      => $emp['effective_salary'],
                     'seniority_years'  => $result['seniority_years'],
@@ -128,6 +116,91 @@ final class PayrollService
 
             return $count;
         });
+    }
+
+    /**
+     * Calcula el recibo de un empleado sin guardar nada. Si se pasa $override, ese concepto
+     * (por ejemplo, uno que se está editando) reemplaza al guardado y se incluye siempre.
+     * Sirve para la vista previa de fórmulas.
+     */
+    public function simulate(array $period, int $employeeId, ?array $override = null): array
+    {
+        $employee = $this->eligibleEmployees($period, $employeeId)[0] ?? null;
+        if ($employee === null) {
+            throw new RuntimeException('El empleado no está alcanzado por ese período (fecha de ingreso o egreso).');
+        }
+        $data = $this->loadConcepts($period, isset($period['id']) ? (int) $period['id'] : null, $employeeId);
+        return $this->calculateEmployee($employee, $period, $data, $override) + ['employee' => $employee];
+    }
+
+    private function calculateEmployee(array $emp, array $period, array $data, ?array $override = null): array
+    {
+        $empId = (int) $emp['id'];
+        $lines = $this->buildLines($data['general'], $data['assigned'][$empId] ?? [], $data['novelties'][$empId] ?? []);
+
+        if ($override !== null) {
+            $ov = $this->conceptLine($override);
+            $found = false;
+            foreach ($lines as &$line) {
+                if (($ov['id'] && $line['id'] === $ov['id']) || $line['code'] === $ov['code']) {
+                    // se conservan cantidad e importe de novedades/asignaciones del empleado
+                    $line = array_merge($ov, ['quantity' => $line['quantity'], 'amount' => $line['amount']]);
+                    $found = true;
+                }
+            }
+            unset($line);
+            if (!$found) {
+                $lines[] = $ov;
+            }
+            if (isset($override['quantity'])) {
+                foreach ($lines as &$line) {
+                    if ($line['code'] === $ov['code']) {
+                        $line['quantity'] = $override['quantity'];
+                    }
+                }
+                unset($line);
+            }
+        }
+
+        $sacBest = $period['type'] === 'sac' ? $this->bestSemesterSalary($empId, $period) : 0.0;
+        $calculator = new PayrollCalculator((int) Settings::get('hours_divisor', '200'));
+        try {
+            return $calculator->calculate([
+                'base_salary'      => (float) $emp['effective_salary'],
+                'hire_date'        => $emp['hire_date'],
+                'termination_date' => $emp['termination_date'],
+                'birth_date'       => $emp['birth_date'],
+            ], $period, $lines, $sacBest);
+        } catch (FormulaException $e) {
+            throw new RuntimeException("Error al liquidar a {$emp['last_name']}, {$emp['first_name']} — {$e->getMessage()}", 0, $e);
+        }
+    }
+
+    /** Conceptos generales, asignados y novedades que intervienen en el período. */
+    private function loadConcepts(array $period, ?int $periodId, ?int $employeeId = null): array
+    {
+        $scopes = [$period['type'], 'ambos'];
+        $empFilter = $employeeId !== null ? ' AND ec.employee_id = ' . (int) $employeeId : '';
+        $novFilter = $employeeId !== null ? ' AND n.employee_id = ' . (int) $employeeId : '';
+
+        return [
+            'general' => $this->db->all(
+                'SELECT * FROM concepts WHERE active = 1 AND applies_to_all = 1 AND scope IN (?, ?)',
+                $scopes
+            ),
+            'assigned' => $this->groupBy($this->db->all(
+                "SELECT c.*, ec.employee_id, ec.value_override, ec.quantity AS assigned_quantity
+                   FROM employee_concepts ec JOIN concepts c ON c.id = ec.concept_id
+                  WHERE c.active = 1 AND c.scope IN (?, ?) $empFilter",
+                $scopes
+            ), 'employee_id'),
+            'novelties' => $periodId === null ? [] : $this->groupBy($this->db->all(
+                "SELECT n.employee_id, n.quantity AS nov_quantity, n.amount AS nov_amount, c.*
+                   FROM novelties n JOIN concepts c ON c.id = n.concept_id
+                  WHERE n.period_id = ? $novFilter",
+                [$periodId]
+            ), 'employee_id'),
+        ];
     }
 
     /**
@@ -181,6 +254,7 @@ final class PayrollService
             'calc_mode'  => $c['calc_mode'],
             'base'       => $c['base'],
             'value'      => $c['value'],
+            'formula'    => $c['formula'] ?? null,
             'sort_order' => $c['sort_order'],
             'quantity'   => null,
             'amount'     => null,

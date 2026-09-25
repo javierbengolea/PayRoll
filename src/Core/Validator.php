@@ -75,13 +75,21 @@ final class Validator
         }
     }
 
-    /** Acepta "1.234,56" o "1234.56" y devuelve "1234.56". */
+    /**
+     * Normaliza importes escritos al estilo argentino o internacional:
+     *   "1.234,56" -> "1234.56"   "1.100.000" -> "1100000"   "1.500" -> "1500"
+     *   "1234.56"  -> "1234.56"   "8,33"      -> "8.33"      "0.125" -> "0.125"
+     */
     public static function normalizeNumber(string $value): string
     {
-        $value = str_replace([' ', '$'], '', trim($value));
+        $value = str_replace([' ', '$', "\u{a0}"], '', trim($value));
         if (str_contains($value, ',')) {
-            $value = str_replace('.', '', $value);
-            $value = str_replace(',', '.', $value);
+            return str_replace(',', '.', str_replace('.', '', $value));
+        }
+        // Solo puntos: si hay más de uno, o uno seguido de exactamente 3 dígitos
+        // (y la parte entera no es 0), son separadores de miles.
+        if (substr_count($value, '.') > 1 || preg_match('/^-?[1-9]\d{0,2}\.\d{3}$/', $value)) {
+            return str_replace('.', '', $value);
         }
         return $value;
     }

@@ -19,6 +19,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 require dirname(__DIR__) . '/src/bootstrap.php';
+require_once __DIR__ . '/sql.php';
 
 $opts = getopt('', ['admin-email:', 'admin-password:', 'admin-name:', 'demo', 'force']);
 $email = strtolower(trim($opts['admin-email'] ?? 'admin@payroll.local'));
@@ -57,9 +58,14 @@ if ($exists && !isset($opts['force'])) {
 }
 
 step('Creando tablas');
-runSqlFile($pdo, BASE_PATH . '/database/schema.sql');
+run_sql_file($pdo, BASE_PATH . '/database/schema.sql');
+// schema.sql ya refleja todas las migraciones: se marcan como aplicadas
+$mark = $pdo->prepare('INSERT INTO migrations (name) VALUES (?)');
+foreach (glob(BASE_PATH . '/database/migrations/*.sql') as $migration) {
+    $mark->execute([basename($migration)]);
+}
 step('Cargando configuración y conceptos estándar');
-runSqlFile($pdo, BASE_PATH . '/database/seed.sql');
+run_sql_file($pdo, BASE_PATH . '/database/seed.sql');
 
 $db = new Database($pdo);
 Database::setConnection($db);
@@ -88,17 +94,6 @@ function step(string $msg): void
     echo "→ $msg\n";
 }
 
-function runSqlFile(PDO $pdo, string $file): void
-{
-    $sql = (string) file_get_contents($file);
-    $sql = preg_replace('/^\s*--.*$/m', '', $sql);
-    foreach (preg_split('/;\s*(\r?\n|$)/', $sql) as $statement) {
-        if (trim($statement) !== '') {
-            $pdo->exec($statement);
-        }
-    }
-}
-
 function cuil(string $prefix, int $dni): string
 {
     $base = $prefix . str_pad((string) $dni, 8, '0', STR_PAD_LEFT);
@@ -125,18 +120,58 @@ function cbu(int $seed): string
 function loadDemo(Database $db, int $adminId): void
 {
     mt_srand(2024);
+    $today = new DateTimeImmutable('first day of this month');
+
+    // Convenios, categorías y escalas: una inicial, una paritaria a mitad de año,
+    // otra vigente desde este mes y una programada para el mes próximo.
+    $agreements = [
+        ['130/75', 'Empleados de Comercio', [
+            ['MAE-A', 'Maestranza A', 905000], ['MAE-C', 'Maestranza C', 932000],
+            ['ADM-A', 'Administrativo A', 912000], ['ADM-B', 'Administrativo B', 921000],
+            ['ADM-D', 'Administrativo D', 948000], ['ADM-E', 'Administrativo E', 972000],
+            ['VEN-B', 'Vendedor B', 940000], ['VEN-D', 'Vendedor D', 985000],
+        ]],
+        ['FC', 'Fuera de convenio', [
+            ['PRO', 'Profesional', 1500000], ['PSR', 'Profesional senior', 2000000],
+            ['JEF', 'Jefatura', 1450000], ['GER', 'Gerencia', 1900000],
+        ]],
+    ];
+    $scales = [
+        [$today->modify('-8 months')->format('Y-m-d'), 1.0],
+        [$today->modify('-4 months')->format('Y-m-d'), 1.06],
+        [$today->format('Y-m-d'), 1.06 * 1.045],
+        [$today->modify('+1 month')->format('Y-m-d'), 1.06 * 1.045 * 1.03],
+    ];
+    $categoryIds = [];
+    foreach ($agreements as [$code, $name, $cats]) {
+        $agreementId = $db->insert('agreements', ['code' => $code, 'name' => $name]);
+        foreach ($cats as $k => [$catCode, $catName, $salary]) {
+            $catId = $db->insert('categories', ['agreement_id' => $agreementId, 'code' => $catCode, 'name' => $catName, 'sort_order' => ($k + 1) * 10]);
+            $categoryIds[$catCode] = ['id' => $catId, 'salary' => $salary];
+            foreach ($scales as [$from, $factor]) {
+                $db->insert('category_salaries', ['category_id' => $catId, 'valid_from' => $from, 'base_salary' => round($salary * $factor, -2)]);
+            }
+        }
+    }
+
+    // Departamentos y puestos, cada puesto con su categoría habitual
     $deps = [
-        'Administración' => [['Jefe administrativo', 1450000], ['Analista contable', 1050000], ['Auxiliar administrativo', 820000]],
-        'Ventas'         => [['Gerente comercial', 1900000], ['Ejecutivo de cuentas', 980000], ['Vendedor', 780000]],
-        'Producción'     => [['Supervisor de planta', 1250000], ['Operario calificado', 860000], ['Operario', 740000]],
-        'Sistemas'       => [['Líder técnico', 2100000], ['Desarrollador', 1550000], ['Soporte técnico', 900000]],
-        'Recursos Humanos' => [['Responsable de RRHH', 1500000], ['Analista de RRHH', 950000]],
+        'Administración'   => [['Jefe administrativo', 'JEF'], ['Analista contable', 'ADM-E'], ['Auxiliar administrativo', 'ADM-B']],
+        'Ventas'           => [['Gerente comercial', 'GER'], ['Ejecutivo de cuentas', 'VEN-D'], ['Vendedor', 'VEN-B']],
+        'Producción'       => [['Supervisor de planta', 'JEF'], ['Operario calificado', 'MAE-C'], ['Operario', 'MAE-A']],
+        'Sistemas'         => [['Líder técnico', 'PSR'], ['Desarrollador', 'PRO'], ['Soporte técnico', 'ADM-D']],
+        'Recursos Humanos' => [['Responsable de RRHH', 'JEF'], ['Analista de RRHH', 'ADM-E']],
     ];
     $positions = [];
     foreach ($deps as $depName => $posList) {
         $depId = $db->insert('departments', ['name' => $depName]);
-        foreach ($posList as [$posName, $salary]) {
-            $positions[] = ['id' => $db->insert('positions', ['department_id' => $depId, 'name' => $posName, 'base_salary' => $salary]), 'dep' => $depId, 'salary' => $salary];
+        foreach ($posList as [$posName, $catCode]) {
+            $positions[] = [
+                'id'       => $db->insert('positions', ['department_id' => $depId, 'name' => $posName]),
+                'dep'      => $depId,
+                'category' => $categoryIds[$catCode]['id'],
+                'salary'   => $categoryIds[$catCode]['salary'],
+            ];
         }
     }
 
@@ -148,7 +183,6 @@ function loadDemo(Database $db, int $adminId): void
         'Aguirre', 'Pereyra', 'Gutiérrez', 'Giménez'];
     $banks = ['Banco Nación', 'Banco Galicia', 'Banco Santander', 'Banco Macro', 'BBVA'];
 
-    $today = new DateTimeImmutable('first day of this month');
     $employeeIds = [];
     foreach ($first as $i => $fn) {
         $pos = $positions[$i % count($positions)];
@@ -170,8 +204,9 @@ function loadDemo(Database $db, int $adminId): void
             'hire_date'     => $hire->format('Y-m-d'),
             'department_id' => $pos['dep'],
             'position_id'   => $pos['id'],
+            'category_id'   => $pos['category'],
             'contract_type' => $i % 9 === 8 ? 'plazo_fijo' : 'permanente',
-            'base_salary'   => $i % 6 === 0 ? round($pos['salary'] * 1.12, -3) : null, // algunos con básico propio
+            'base_salary'   => $i % 12 === 7 ? round($pos['salary'] * 1.25, -3) : null, // alguno con básico propio
             'bank_name'     => $banks[$i % count($banks)],
             'cbu'           => cbu($i + 1),
             'status'        => $i === 5 ? 'licencia' : 'activo',
@@ -185,6 +220,13 @@ function loadDemo(Database $db, int $adminId): void
     }
 
     $concept = fn (string $code) => (int) $db->value('SELECT id FROM concepts WHERE code = ?', [$code]);
+
+    // Adicional por título (fórmula BASICO * VALOR / 100), uno con un % propio
+    foreach ([1, 10, 13, 16, 23] as $k => $idx) {
+        $db->insert('employee_concepts', [
+            'employee_id' => $employeeIds[$idx], 'concept_id' => $concept('160'), 'value_override' => $k === 0 ? 15 : null,
+        ]);
+    }
     $service = new PayrollService($db);
 
     // Liquidaciones de los últimos 8 meses cerradas + mes actual en borrador

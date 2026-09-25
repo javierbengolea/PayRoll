@@ -69,11 +69,10 @@
         sync();
     }
 
-    // Formulario de empleado: filtrar puestos por departamento y mostrar básico del puesto
+    // Formulario de empleado: filtrar puestos por departamento y mostrar el básico de la categoría
     var dep = document.getElementById('department_id');
     var pos = document.getElementById('position_id');
     if (dep && pos) {
-        var hint = document.getElementById('positionSalaryHint');
         var filterPositions = function () {
             Array.prototype.forEach.call(pos.options, function (o) {
                 if (!o.value) return;
@@ -81,15 +80,20 @@
                 o.hidden = !!dep.value && !!d && d !== dep.value;
             });
             if (pos.selectedOptions[0] && pos.selectedOptions[0].hidden) pos.value = '';
-            showSalary();
-        };
-        var showSalary = function () {
-            if (!hint) return;
-            var o = pos.selectedOptions[0];
-            hint.textContent = o && o.value ? 'Básico del puesto: ' + o.getAttribute('data-salary') + '. Dejá vacío para usarlo.' : 'Si queda vacío se usa el básico del puesto.';
         };
         dep.addEventListener('change', filterPositions);
-        pos.addEventListener('change', showSalary);
         filterPositions();
+    }
+    var cat = document.getElementById('category_id');
+    var catHint = document.getElementById('categorySalaryHint');
+    if (cat && catHint) {
+        var showSalary = function () {
+            var o = cat.selectedOptions[0];
+            catHint.textContent = o && o.value
+                ? 'Básico vigente de la categoría: ' + o.getAttribute('data-salary') + '.'
+                : 'Sin categoría: cargá un básico propio.';
+        };
+        cat.addEventListener('change', showSalary);
+        showSalary();
     }
 })();

@@ -7,7 +7,7 @@ use App\Core\Audit;
 use App\Core\Controller;
 use App\Core\Validator;
 
-/** Departamentos y puestos (con su sueldo básico). */
+/** Departamentos y puestos (funciones). El básico lo define la categoría del convenio. */
 final class OrganizationController extends Controller
 {
     public function index(): void
@@ -64,8 +64,7 @@ final class OrganizationController extends Controller
     public function savePosition(): void
     {
         $id = $this->intParam('id');
-        $v = Validator::make($_POST, ['name' => 'required|maxlen:120', 'base_salary' => 'required|numeric|min:0'],
-            ['name' => 'Nombre', 'base_salary' => 'Sueldo básico']);
+        $v = Validator::make($_POST, ['name' => 'required|maxlen:120'], ['name' => 'Nombre']);
         if ($v->fails()) {
             $this->flash('danger', implode(' ', $v->errors()));
             $this->redirect('organization', ['tab' => 'positions']);
@@ -73,7 +72,6 @@ final class OrganizationController extends Controller
         $data = [
             'name'          => (string) $this->input('name'),
             'department_id' => (int) $this->input('department_id') ?: null,
-            'base_salary'   => Validator::normalizeNumber((string) $this->input('base_salary')),
             'active'        => isset($_POST['active']) ? 1 : 0,
         ];
         if ($id) {
@@ -81,7 +79,7 @@ final class OrganizationController extends Controller
         } else {
             $id = $this->db->insert('positions', $data);
         }
-        Audit::log('guardar', 'position', $id, $data['name'] . ' - básico ' . $data['base_salary']);
+        Audit::log('guardar', 'position', $id, $data['name']);
         $this->flash('success', 'Puesto guardado.');
         $this->redirect('organization', ['tab' => 'positions']);
     }
@@ -96,29 +94,6 @@ final class OrganizationController extends Controller
             Audit::log('eliminar', 'position', $id);
             $this->flash('success', 'Puesto eliminado.');
         }
-        $this->redirect('organization', ['tab' => 'positions']);
-    }
-
-    /** Aumento general: aplica un % a los básicos de puestos (y opcionalmente a los básicos individuales). */
-    public function raise(): void
-    {
-        $v = Validator::make($_POST, ['percent' => 'required|numeric|min:-50|max:500'], ['percent' => 'Porcentaje']);
-        if ($v->fails()) {
-            $this->flash('danger', implode(' ', $v->errors()));
-            $this->redirect('organization', ['tab' => 'positions']);
-        }
-        $factor = 1 + (float) Validator::normalizeNumber((string) $this->input('percent')) / 100;
-        $includeEmployees = isset($_POST['include_employees']);
-
-        $this->db->transaction(function ($db) use ($factor, $includeEmployees) {
-            $db->run('UPDATE positions SET base_salary = ROUND(base_salary * ?, 2) WHERE active = 1', [$factor]);
-            if ($includeEmployees) {
-                $db->run("UPDATE employees SET base_salary = ROUND(base_salary * ?, 2) WHERE base_salary IS NOT NULL AND status <> 'baja'", [$factor]);
-            }
-        });
-        $pct = num(($factor - 1) * 100);
-        Audit::log('aumento_general', 'position', null, "{$pct}%" . ($includeEmployees ? ' (incluye básicos individuales)' : ''));
-        $this->flash('success', "Se aplicó un ajuste del {$pct}% a los sueldos básicos.");
         $this->redirect('organization', ['tab' => 'positions']);
     }
 }

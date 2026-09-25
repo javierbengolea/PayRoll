@@ -31,6 +31,10 @@ final class HelpersTest extends TestCase
         $this->assertSame('1500.5', Validator::normalizeNumber('1500.5'));
         $this->assertSame('8.33', Validator::normalizeNumber('8,33'));
         $this->assertSame('1200', Validator::normalizeNumber('$ 1200'));
+        $this->assertSame('1100000', Validator::normalizeNumber('1.100.000'));
+        $this->assertSame('1500', Validator::normalizeNumber('1.500'));
+        $this->assertSame('0.125', Validator::normalizeNumber('0.125'));
+        $this->assertSame('8.33', Validator::normalizeNumber('8.33'));
     }
 
     public function testValidatorRules(): void

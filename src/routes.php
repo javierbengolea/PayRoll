@@ -29,7 +29,13 @@ return [
     'departments/delete'    => [C\OrganizationController::class, 'deleteDepartment', 'POST', 'rrhh'],
     'positions/save'        => [C\OrganizationController::class, 'savePosition', 'POST', 'rrhh'],
     'positions/delete'      => [C\OrganizationController::class, 'deletePosition', 'POST', 'rrhh'],
-    'positions/raise'       => [C\OrganizationController::class, 'raise', 'POST', 'rrhh'],
+
+    'categories'            => [C\CategoryController::class, 'index', 'GET', 'consulta'],
+    'agreements/save'       => [C\CategoryController::class, 'saveAgreement', 'POST', 'rrhh'],
+    'categories/save'       => [C\CategoryController::class, 'saveCategory', 'POST', 'rrhh'],
+    'categories/delete'     => [C\CategoryController::class, 'deleteCategory', 'POST', 'rrhh'],
+    'categories/scale'      => [C\CategoryController::class, 'saveScale', 'POST', 'rrhh'],
+    'categories/scale-del'  => [C\CategoryController::class, 'deleteScale', 'POST', 'rrhh'],
 
     'concepts'              => [C\ConceptController::class, 'index', 'GET', 'consulta'],
     'concepts/create'       => [C\ConceptController::class, 'create', 'GET', 'rrhh'],
@@ -37,6 +43,7 @@ return [
     'concepts/edit'         => [C\ConceptController::class, 'edit', 'GET', 'rrhh'],
     'concepts/update'       => [C\ConceptController::class, 'update', 'POST', 'rrhh'],
     'concepts/toggle'       => [C\ConceptController::class, 'toggle', 'POST', 'rrhh'],
+    'concepts/preview'      => [C\ConceptController::class, 'preview', 'POST', 'rrhh'],
 
     'periods'               => [C\PeriodController::class, 'index', 'GET', 'consulta'],
     'periods/store'         => [C\PeriodController::class, 'store', 'POST', 'rrhh'],
